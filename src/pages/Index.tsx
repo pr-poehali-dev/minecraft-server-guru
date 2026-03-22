@@ -140,6 +140,7 @@ const TABS = [
   { id: "top", label: "Топ", icon: "Trophy" },
   { id: "rating", label: "Рейтинг", icon: "Star" },
   { id: "catalog", label: "Каталог", icon: "LayoutGrid" },
+  { id: "add", label: "Добавить", icon: "PlusCircle" },
 ];
 
 function formatOnline(n: number) {
@@ -268,6 +269,158 @@ function ServerCard({ server, index, compact = false }: { server: typeof SERVERS
         <Icon name={copied ? "Check" : "Copy"} size={13} />
         {copied ? "Скопировано!" : server.ip}
       </button>
+    </div>
+  );
+}
+
+function AddServerSection() {
+  const [form, setForm] = useState({ name: "", ip: "", mode: "", version: "", description: "", discord: "" });
+  const [submitted, setSubmitted] = useState(false);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitted(true);
+  }
+
+  if (submitted) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 animate-fade-in-up">
+        <div className="text-6xl mb-6 animate-float">🎉</div>
+        <div className="font-pixel text-sm mb-3" style={{ color: "#00FF88", textShadow: "0 0 20px #00FF88" }}>ЗАЯВКА ОТПРАВЛЕНА!</div>
+        <p className="text-sm text-center max-w-sm" style={{ color: "#666" }}>
+          Мы рассмотрим твою заявку и добавим сервер в каталог в течение 24 часов.
+        </p>
+        <button
+          onClick={() => { setSubmitted(false); setForm({ name: "", ip: "", mode: "", version: "", description: "", discord: "" }); }}
+          className="mt-8 font-pixel text-xs px-6 py-3 rounded-xl transition-all hover:scale-105"
+          style={{ background: "#111", color: "#00FF88", border: "1px solid #00FF8833" }}
+        >
+          ← ПОДАТЬ ЕЩЁ ЗАЯВКУ
+        </button>
+      </div>
+    );
+  }
+
+  const inputStyle = {
+    background: "#111",
+    border: "1px solid #222",
+    color: "#F0F0F0",
+    outline: "none",
+    fontFamily: "Rubik, sans-serif",
+    borderRadius: 10,
+    padding: "10px 14px",
+    width: "100%",
+    fontSize: 14,
+    transition: "border-color 0.2s, box-shadow 0.2s",
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-8">
+        <span className="font-pixel text-xs" style={{ color: "#00FF88", textShadow: "0 0 10px #00FF88" }}>➕ ДОБАВИТЬ СЕРВЕР</span>
+        <div className="flex-1 h-px" style={{ background: "linear-gradient(90deg, #00FF8833, transparent)" }} />
+      </div>
+
+      {/* Banner */}
+      <div className="rounded-2xl p-6 mb-8 text-center" style={{ background: "linear-gradient(135deg, #0d1a0f, #0a0a0a)", border: "1px solid #00FF8822" }}>
+        <div className="font-pixel text-xs mb-2" style={{ color: "#00FF88" }}>🚀 РАЗМЕСТИ СВОЙ СЕРВЕР БЕСПЛАТНО</div>
+        <p className="text-sm" style={{ color: "#666" }}>Тысячи игроков ищут серверы прямо сейчас. Попади в каталог и увеличь онлайн!</p>
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-5 max-w-xl mx-auto">
+        {/* Name */}
+        <div>
+          <label className="text-xs font-semibold mb-2 block" style={{ color: "#555" }}>НАЗВАНИЕ СЕРВЕРА *</label>
+          <input
+            required
+            placeholder="Например: MyCraft"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            style={inputStyle}
+            onFocus={(e) => { e.target.style.borderColor = "#00FF88"; e.target.style.boxShadow = "0 0 12px rgba(0,255,136,0.2)"; }}
+            onBlur={(e) => { e.target.style.borderColor = "#222"; e.target.style.boxShadow = "none"; }}
+          />
+        </div>
+
+        {/* IP */}
+        <div>
+          <label className="text-xs font-semibold mb-2 block" style={{ color: "#555" }}>IP АДРЕС СЕРВЕРА *</label>
+          <input
+            required
+            placeholder="play.mycraft.ru"
+            value={form.ip}
+            onChange={(e) => setForm({ ...form, ip: e.target.value })}
+            style={{ ...inputStyle, fontFamily: "monospace" }}
+            onFocus={(e) => { e.target.style.borderColor = "#00FF88"; e.target.style.boxShadow = "0 0 12px rgba(0,255,136,0.2)"; }}
+            onBlur={(e) => { e.target.style.borderColor = "#222"; e.target.style.boxShadow = "none"; }}
+          />
+        </div>
+
+        {/* Mode + Version */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-semibold mb-2 block" style={{ color: "#555" }}>РЕЖИМ ИГРЫ *</label>
+            <select
+              required
+              value={form.mode}
+              onChange={(e) => setForm({ ...form, mode: e.target.value })}
+              style={{ ...inputStyle, cursor: "pointer" }}
+              onFocus={(e) => { e.target.style.borderColor = "#00FF88"; }}
+              onBlur={(e) => { e.target.style.borderColor = "#222"; }}
+            >
+              <option value="" style={{ background: "#111" }}>Выбрать...</option>
+              {MODES.slice(1).map((m) => <option key={m} value={m} style={{ background: "#111" }}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-semibold mb-2 block" style={{ color: "#555" }}>ВЕРСИЯ</label>
+            <input
+              placeholder="1.20.4"
+              value={form.version}
+              onChange={(e) => setForm({ ...form, version: e.target.value })}
+              style={inputStyle}
+              onFocus={(e) => { e.target.style.borderColor = "#00FF88"; e.target.style.boxShadow = "0 0 12px rgba(0,255,136,0.2)"; }}
+              onBlur={(e) => { e.target.style.borderColor = "#222"; e.target.style.boxShadow = "none"; }}
+            />
+          </div>
+        </div>
+
+        {/* Description */}
+        <div>
+          <label className="text-xs font-semibold mb-2 block" style={{ color: "#555" }}>ОПИСАНИЕ *</label>
+          <textarea
+            required
+            rows={3}
+            placeholder="Расскажи об особенностях сервера — режимы, фишки, атмосфера..."
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+            style={{ ...inputStyle, resize: "vertical" }}
+            onFocus={(e) => { e.target.style.borderColor = "#00FF88"; e.target.style.boxShadow = "0 0 12px rgba(0,255,136,0.2)"; }}
+            onBlur={(e) => { e.target.style.borderColor = "#222"; e.target.style.boxShadow = "none"; }}
+          />
+        </div>
+
+        {/* Discord */}
+        <div>
+          <label className="text-xs font-semibold mb-2 block" style={{ color: "#555" }}>DISCORD / КОНТАКТ</label>
+          <input
+            placeholder="discord.gg/myserver"
+            value={form.discord}
+            onChange={(e) => setForm({ ...form, discord: e.target.value })}
+            style={inputStyle}
+            onFocus={(e) => { e.target.style.borderColor = "#00CFFF"; e.target.style.boxShadow = "0 0 12px rgba(0,207,255,0.2)"; }}
+            onBlur={(e) => { e.target.style.borderColor = "#222"; e.target.style.boxShadow = "none"; }}
+          />
+        </div>
+
+        <button
+          type="submit"
+          className="font-pixel text-xs py-4 rounded-xl transition-all hover:scale-[1.02] active:scale-95 mt-2"
+          style={{ background: "linear-gradient(135deg, #00FF88, #00CFFF)", color: "#080808", boxShadow: "0 0 24px rgba(0,255,136,0.3)" }}
+        >
+          ▶ ОТПРАВИТЬ ЗАЯВКУ
+        </button>
+      </form>
     </div>
   );
 }
@@ -606,13 +759,20 @@ export default function Index() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {SERVERS.slice(3, 7).map((s, i) => <ServerCard key={s.id} server={s} index={i + 3} />)}
             </div>
-            <div className="text-center mt-6">
+            <div className="flex justify-center gap-4 mt-6 flex-wrap">
               <button
                 onClick={() => setTab("catalog")}
                 className="font-pixel text-xs px-6 py-3 rounded-xl transition-all hover:scale-105"
                 style={{ background: "#111", color: "#00FF88", border: "1px solid #00FF8833" }}
               >
                 ПОКАЗАТЬ ВСЕ СЕРВЕРЫ →
+              </button>
+              <button
+                onClick={() => setTab("add")}
+                className="font-pixel text-xs px-6 py-3 rounded-xl transition-all hover:scale-105"
+                style={{ background: "linear-gradient(135deg, #00FF8822, #00CFFF11)", color: "#00FF88", border: "1px solid #00FF8833" }}
+              >
+                ➕ ДОБАВИТЬ СЕРВЕР
               </button>
             </div>
           </>
@@ -628,6 +788,7 @@ export default function Index() {
             version={version} onVersion={setVersion}
           />
         )}
+        {tab === "add" && <AddServerSection />}
       </main>
 
       <footer className="text-center py-8 mt-8" style={{ borderTop: "1px solid #1a1a1a" }}>
