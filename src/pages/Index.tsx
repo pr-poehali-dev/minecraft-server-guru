@@ -280,9 +280,9 @@ function HeroSection({ onExplore }: { onExplore: () => void }) {
         >
           <span className="gradient-text">НАЙДИ СВОЙ</span>
           <br />
-          <span style={{ color: "#F0F0F0" }}>ИДЕАЛЬНЫЙ</span>
+          <span style={{ color: "#F0F0F0" }}>СЕРВЕР</span>
           <br />
-          <span style={{ color: "#00FF88", textShadow: "0 0 20px #00FF88" }}>СЕРВЕР</span>
+          <span style={{ color: "#00FF88", textShadow: "0 0 20px #00FF88" }}>ПО ВКУСУ</span>
         </h1>
         <p className="text-base mb-8 animate-fade-in-up delay-200 max-w-lg mx-auto" style={{ color: "#666" }}>
           Лучшие Minecraft серверы для игры на ПК — рейтинг, отзывы, онлайн в реальном времени
