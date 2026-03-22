@@ -1,634 +1,601 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import Icon from "@/components/ui/icon";
+import { useEffect, useRef, useState, useCallback } from "react";
+import * as THREE from "three";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-interface Player {
-  x: number; y: number;
-  hp: number; maxHp: number;
-  coins: number; score: number;
-  flying: boolean; immortal: boolean;
-  speedBoost: boolean;
+// ─── Типы ────────────────────────────────────────────────────────────────────
+interface Cheats {
+  fly: boolean;
+  immortal: boolean;
+  speed: boolean;
+  noclip: boolean;
 }
 
-interface Enemy {
-  id: number; x: number; y: number;
-  hp: number; maxHp: number; speed: number;
+interface HUD {
+  hp: number;
+  coins: number;
+  score: number;
+  cheats: Cheats;
+  locked: boolean;
+  paused: boolean;
+  blocks: number;
 }
 
-interface Coin { id: number; x: number; y: number; value: number; }
-interface Item  { id: number; x: number; y: number; type: string; }
-interface Particle { id: number; x: number; y: number; vx: number; vy: number; life: number; color: string; text?: string; }
+// ─── Константы ───────────────────────────────────────────────────────────────
+const WORLD_SIZE   = 32;
+const BLOCK_SIZE   = 1;
+const PLAYER_H     = 1.7;
+const GRAVITY      = -20;
+const JUMP_V       = 8;
+const WALK_SPEED   = 5;
+const FLY_SPEED    = 10;
+const SPRINT_MULT  = 1.8;
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const W = 800, H = 520;
-const PLAYER_SIZE = 28;
-const ENEMY_SIZE  = 26;
-const COIN_SIZE   = 14;
-const GROUND_Y    = H - 60;
-const GRAVITY     = 0.55;
-const JUMP_FORCE  = -13;
-const MOVE_SPEED  = 4;
-const ADMIN_PASSWORD = "admin123";
-
-const ITEM_TYPES: Record<string, { color: string; label: string; icon: string }> = {
-  shield:  { color: "#00CFFF", label: "Щит",    icon: "🛡️" },
-  bomb:    { color: "#FF0080", label: "Бомба",   icon: "💣" },
-  star:    { color: "#FFE600", label: "Звезда",  icon: "⭐" },
+// ─── Цвета блоков ─────────────────────────────────────────────────────────────
+const BLOCK_COLORS: Record<string, number> = {
+  grass:     0x5a9e3a,
+  dirt:      0x8b5e3c,
+  stone:     0x7a7a7a,
+  wood:      0x8b6914,
+  leaves:    0x2d7a1f,
+  sand:      0xe8d87a,
+  glowstone: 0xFFD700,
+  obsidian:  0x1a0a2a,
 };
 
-const PLATFORM_LIST = [
-  { x: 80,  y: 360, w: 120, h: 16 },
-  { x: 280, y: 300, w: 140, h: 16 },
-  { x: 500, y: 250, w: 120, h: 16 },
-  { x: 650, y: 370, w: 100, h: 16 },
-  { x: 180, y: 200, w: 100, h: 16 },
-  { x: 380, y: 160, w: 130, h: 16 },
-];
+// ─── Генерация мира ──────────────────────────────────────────────────────────
+function generateWorld() {
+  const blocks: Map<string, string> = new Map();
+  function key(x: number, y: number, z: number) { return `${x},${y},${z}`; }
 
-function mkEnemy(id: number): Enemy {
-  return {
-    id, hp: 40, maxHp: 40, speed: 1.2 + Math.random(),
-    x: Math.random() > 0.5 ? W + 40 : -40,
-    y: GROUND_Y - ENEMY_SIZE,
-  };
-}
-function mkCoin(id: number): Coin {
-  return { id, value: 10, x: 60 + Math.random() * (W - 120), y: GROUND_Y - COIN_SIZE - Math.random() * 200 };
-}
-function mkItem(id: number): Item {
-  const types = Object.keys(ITEM_TYPES);
-  return { id, type: types[Math.floor(Math.random() * types.length)], x: 60 + Math.random() * (W - 120), y: GROUND_Y - 30 };
+  for (let x = -WORLD_SIZE; x <= WORLD_SIZE; x++) {
+    for (let z = -WORLD_SIZE; z <= WORLD_SIZE; z++) {
+      const h = Math.floor(
+        Math.sin(x * 0.18) * 2.5 +
+        Math.cos(z * 0.13) * 2 +
+        Math.sin((x + z) * 0.09) * 1.5,
+      );
+      for (let y = -3; y <= h; y++) {
+        if (y === h)        blocks.set(key(x, y, z), "grass");
+        else if (y >= h - 2) blocks.set(key(x, y, z), "dirt");
+        else                 blocks.set(key(x, y, z), "stone");
+      }
+    }
+  }
+
+  // Деревья
+  const trees = [[3,0,3],[-5,0,7],[8,0,-4],[-10,0,-8],[15,0,5],[-7,0,-15],[12,0,12],[-18,0,3],[6,0,-18],[20,0,-10]];
+  for (const [tx,,tz] of trees) {
+    const bx = tx as number, bz = tz as number;
+    let topY = 0;
+    for (let y = 5; y >= -3; y--) { if (blocks.has(key(bx, y, bz))) { topY = y + 1; break; } }
+    for (let y = topY; y < topY + 4; y++) blocks.set(key(bx, y, bz), "wood");
+    for (let lx = bx - 2; lx <= bx + 2; lx++)
+      for (let lz = bz - 2; lz <= bz + 2; lz++)
+        for (let ly = topY + 3; ly <= topY + 5; ly++)
+          if (!blocks.has(key(lx, ly, lz))) blocks.set(key(lx, ly, lz), "leaves");
+  }
+
+  // Особые блоки
+  [[5,1,5],[-5,1,-5],[0,1,10],[-12,1,8],[14,1,-12]].forEach(([x,y,z]) => blocks.set(key(x,y,z), "glowstone"));
+
+  return blocks;
 }
 
-function dist(ax: number, ay: number, bx: number, by: number) {
-  return Math.sqrt((ax - bx) ** 2 + (ay - by) ** 2);
-}
-
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Основной компонент ──────────────────────────────────────────────────────
 export default function Game() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef  = useRef({
-    player: { x: 100, y: GROUND_Y - PLAYER_SIZE, hp: 100, maxHp: 100, coins: 0, score: 0, flying: false, immortal: false, speedBoost: false } as Player,
-    vy: 0,
-    onGround: true,
-    enemies: [] as Enemy[],
-    coins: [] as Coin[],
-    items: [] as Item[],
-    particles: [] as Particle[],
-    keys: {} as Record<string, boolean>,
-    tick: 0,
-    pidCounter: 1,
-    gameOver: false,
-    paused: false,
-  });
+  const mountRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const gRef = useRef<any>(null);
 
-  const [uiState, setUiState] = useState({
-    hp: 100, coins: 0, score: 0, flying: false, immortal: false, speedBoost: false,
-    gameOver: false, paused: false,
+  const [hud, setHud] = useState<HUD>({
+    hp: 100, coins: 0, score: 0,
+    cheats: { fly: false, immortal: false, speed: false, noclip: false },
+    locked: false, paused: false, blocks: 0,
   });
-  const [cheatLog, setCheatLog] = useState<string[]>([]);
   const [showCheats, setShowCheats] = useState(false);
+  const [cheatLog, setCheatLog]     = useState<string[]>([]);
+  const [selectedBlock, setSelectedBlock] = useState("grass");
+  const [notification, setNotification]   = useState<string | null>(null);
 
-  // Admin panel
-  const [showAdmin, setShowAdmin] = useState(false);
-  const [adminUnlocked, setAdminUnlocked] = useState(false);
-  const [adminPass, setAdminPass] = useState("");
-  const [adminError, setAdminError] = useState(false);
-
-  const rafRef = useRef<number>(0);
-
-  // Log cheat
-  const logCheat = useCallback((msg: string) => {
-    setCheatLog((p) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...p].slice(0, 20));
+  const notify = useCallback((msg: string) => {
+    setNotification(msg);
+    setCheatLog((p) => [msg, ...p].slice(0, 12));
+    setTimeout(() => setNotification(null), 2000);
   }, []);
 
-  // ── Cheats ─────────────────────────────────────────────────────────────────
-  const cheatTeleport = useCallback(() => {
-    const s = stateRef.current;
-    s.player.x = W / 2; s.player.y = GROUND_Y - PLAYER_SIZE; s.vy = 0;
-    addParticle(s, W / 2, GROUND_Y - PLAYER_SIZE, "#00CFFF", "ТЕЛЕПОРТ!");
-    logCheat("Телепорт — перемещён в центр");
-  }, [logCheat]);
+  // ── Читы ──────────────────────────────────────────────────────────────────
+  const toggleFly = useCallback(() => {
+    const g = gRef.current; if (!g) return;
+    g.cheats.fly = !g.cheats.fly;
+    if (g.cheats.fly) g.vel.y = 0;
+    setHud((h) => ({ ...h, cheats: { ...h.cheats, fly: g.cheats.fly } }));
+    notify(g.cheats.fly ? "✈ Полёт ВКЛЮЧЁН" : "✈ Полёт ВЫКЛЮЧЁН");
+  }, [notify]);
 
-  const cheatFly = useCallback(() => {
-    const s = stateRef.current;
-    s.player.flying = !s.player.flying;
-    setUiState((u) => ({ ...u, flying: s.player.flying }));
-    logCheat(s.player.flying ? "Полёт ВКЛЮЧЁН" : "Полёт ВЫКЛЮЧЁН");
-  }, [logCheat]);
+  const toggleImmortal = useCallback(() => {
+    const g = gRef.current; if (!g) return;
+    g.cheats.immortal = !g.cheats.immortal;
+    setHud((h) => ({ ...h, cheats: { ...h.cheats, immortal: g.cheats.immortal } }));
+    notify(g.cheats.immortal ? "⭐ Бессмертие ВКЛЮЧЕНО" : "⭐ Бессмертие ВЫКЛЮЧЕНО");
+  }, [notify]);
 
-  const cheatImmortal = useCallback(() => {
-    const s = stateRef.current;
-    s.player.immortal = !s.player.immortal;
-    setUiState((u) => ({ ...u, immortal: s.player.immortal }));
-    logCheat(s.player.immortal ? "Бессмертие ВКЛЮЧЕНО" : "Бессмертие ВЫКЛЮЧЕНО");
-  }, [logCheat]);
+  const toggleSpeed = useCallback(() => {
+    const g = gRef.current; if (!g) return;
+    g.cheats.speed = !g.cheats.speed;
+    setHud((h) => ({ ...h, cheats: { ...h.cheats, speed: g.cheats.speed } }));
+    notify(g.cheats.speed ? "⚡ Скорость x3 ВКЛЮЧЕНА" : "⚡ Скорость x3 ВЫКЛЮЧЕНА");
+  }, [notify]);
 
-  const cheatMoney = useCallback((amount = 1000) => {
-    const s = stateRef.current;
-    s.player.coins += amount;
-    addParticle(s, s.player.x, s.player.y, "#FFE600", `+${amount}💰`);
-    setUiState((u) => ({ ...u, coins: s.player.coins }));
-    logCheat(`+${amount} монет`);
-  }, [logCheat]);
-
-  const cheatKillAll = useCallback(() => {
-    const s = stateRef.current;
-    const n = s.enemies.length;
-    s.enemies.forEach((e) => addParticle(s, e.x, e.y, "#FF0080", "💀"));
-    s.enemies = [];
-    logCheat(`Убито врагов: ${n}`);
-  }, [logCheat]);
-
-  const cheatSpawnItem = useCallback((type: string) => {
-    const s = stateRef.current;
-    s.items.push({ id: s.pidCounter++, type, x: s.player.x + 40, y: s.player.y });
-    logCheat(`Заспавнен предмет: ${ITEM_TYPES[type]?.label}`);
-  }, [logCheat]);
-
-  const cheatSpeed = useCallback(() => {
-    const s = stateRef.current;
-    s.player.speedBoost = !s.player.speedBoost;
-    setUiState((u) => ({ ...u, speedBoost: s.player.speedBoost }));
-    logCheat(s.player.speedBoost ? "Скорость x3 ВКЛЮЧЕНА" : "Скорость x3 ВЫКЛЮЧЕНА");
-  }, [logCheat]);
+  const toggleNoclip = useCallback(() => {
+    const g = gRef.current; if (!g) return;
+    g.cheats.noclip = !g.cheats.noclip;
+    setHud((h) => ({ ...h, cheats: { ...h.cheats, noclip: g.cheats.noclip } }));
+    notify(g.cheats.noclip ? "👻 Noclip ВКЛЮЧЁН" : "👻 Noclip ВЫКЛЮЧЁН");
+  }, [notify]);
 
   const cheatFullHp = useCallback(() => {
-    const s = stateRef.current;
-    s.player.hp = s.player.maxHp;
-    setUiState((u) => ({ ...u, hp: s.player.maxHp }));
-    addParticle(s, s.player.x, s.player.y, "#00FF88", "+100 HP");
-    logCheat("Здоровье восстановлено");
-  }, [logCheat]);
+    const g = gRef.current; if (!g) return;
+    g.hp = 100;
+    setHud((h) => ({ ...h, hp: 100 }));
+    notify("💊 Здоровье восстановлено");
+  }, [notify]);
 
-  const cheatSpawnEnemy = useCallback((n = 3) => {
-    const s = stateRef.current;
-    for (let i = 0; i < n; i++) s.enemies.push(mkEnemy(s.pidCounter++));
-    logCheat(`Заспавнено врагов: ${n}`);
-  }, [logCheat]);
+  const cheatAddCoins = useCallback((n: number) => {
+    const g = gRef.current; if (!g) return;
+    g.coins_count += n;
+    setHud((h) => ({ ...h, coins: g.coins_count }));
+    notify(`💰 +${n} монет`);
+  }, [notify]);
 
-  // ── Particles ───────────────────────────────────────────────────────────────
-  function addParticle(s: typeof stateRef.current, x: number, y: number, color: string, text?: string) {
-    for (let i = 0; i < (text ? 1 : 6); i++) {
-      s.particles.push({
-        id: s.pidCounter++, x, y,
-        vx: text ? 0 : (Math.random() - 0.5) * 4,
-        vy: text ? -2.5 : -2 - Math.random() * 3,
-        life: text ? 60 : 30 + Math.random() * 20,
-        color, text,
-      });
-    }
-  }
+  const cheatTeleport = useCallback(() => {
+    const g = gRef.current; if (!g) return;
+    g.pos.set(0, 10, 0);
+    g.vel.set(0, 0, 0);
+    notify("📍 Телепорт на спавн");
+  }, [notify]);
 
-  // ── Game loop ───────────────────────────────────────────────────────────────
+  const cheatKillEnemies = useCallback(() => {
+    const g = gRef.current; if (!g) return;
+    g.enemies.forEach((e: { mesh: THREE.Mesh }) => g.scene.remove(e.mesh));
+    g.enemies = [];
+    notify("💀 Все враги уничтожены");
+  }, [notify]);
+
+  // ── Three.js init ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const s = stateRef.current;
+    const mount = mountRef.current;
+    if (!mount) return;
 
-    // Spawn initial
-    for (let i = 0; i < 6; i++) s.coins.push(mkCoin(s.pidCounter++));
-    for (let i = 0; i < 2; i++) s.enemies.push(mkEnemy(s.pidCounter++));
-    for (let i = 0; i < 2; i++) s.items.push(mkItem(s.pidCounter++));
+    // Scene
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB);
+    scene.fog = new THREE.Fog(0x87CEEB, 20, 60);
 
-    function onKey(e: KeyboardEvent, down: boolean) {
-      s.keys[e.key] = down;
-      if (down && (e.key === " " || e.key === "ArrowUp" || e.key === "w") && s.onGround && !s.player.flying) {
-        s.vy = JUMP_FORCE;
-        s.onGround = false;
+    // Camera
+    const camera = new THREE.PerspectiveCamera(75, mount.clientWidth / mount.clientHeight, 0.05, 200);
+
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    mount.appendChild(renderer.domElement);
+
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+    const sun = new THREE.DirectionalLight(0xfff5e0, 1.2);
+    sun.position.set(20, 40, 20);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    Object.assign(sun.shadow.camera, { near: 0.5, far: 100, left: -40, right: 40, top: 40, bottom: -40 });
+    scene.add(sun);
+
+    // Raycaster
+    const raycaster = new THREE.Raycaster();
+
+    // Blocks
+    const blocks = generateWorld();
+    const blockMeshes: Map<string, THREE.Mesh> = new Map();
+    const glowMeshes: THREE.Mesh[] = [];
+    const geom = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    const matCache = new Map<string, THREE.MeshLambertMaterial>();
+
+    function getMat(type: string) {
+      if (matCache.has(type)) return matCache.get(type)!;
+      const mat = new THREE.MeshLambertMaterial({ color: BLOCK_COLORS[type] ?? 0x888888 });
+      if (type === "leaves") { mat.transparent = true; mat.opacity = 0.85; }
+      matCache.set(type, mat);
+      return mat;
+    }
+
+    blocks.forEach((type, k) => {
+      const [x, y, z] = k.split(",").map(Number);
+      const mesh = new THREE.Mesh(geom, getMat(type));
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true; mesh.receiveShadow = true;
+      mesh.userData = { blockKey: k, blockType: type };
+      scene.add(mesh);
+      blockMeshes.set(k, mesh);
+      if (type === "glowstone") glowMeshes.push(mesh);
+    });
+
+    // Coins
+    const coinGeo = new THREE.SphereGeometry(0.2, 8, 8);
+    const coinMat = new THREE.MeshLambertMaterial({ color: 0xFFE600 });
+    const coins: THREE.Mesh[] = [];
+    [[2,3,2],[-3,4,5],[7,5,-3],[-8,3,-6],[10,4,8],[-12,3,2],[5,6,-12],[15,4,5],[-6,5,15],[1,3,-10],[18,3,-5],[-15,4,-10],[8,5,18],[-4,3,-18],[12,3,-14]].forEach(([cx,cy,cz]) => {
+      const c = new THREE.Mesh(coinGeo, coinMat);
+      c.position.set(cx, cy, cz);
+      scene.add(c); coins.push(c);
+    });
+
+    // Enemies
+    const enemyGeo = new THREE.BoxGeometry(0.8, 1.6, 0.8);
+    const enemyMat = new THREE.MeshLambertMaterial({ color: 0xFF2244 });
+    const enemies: { mesh: THREE.Mesh }[] = [];
+    [[10,5,10],[-10,5,-10],[15,5,-8],[-8,5,15]].forEach(([ex,ey,ez]) => {
+      const m = new THREE.Mesh(enemyGeo, enemyMat);
+      m.position.set(ex, ey, ez);
+      scene.add(m); enemies.push({ mesh: m });
+    });
+
+    // Stars
+    const sv: number[] = [];
+    for (let i = 0; i < 300; i++) sv.push((Math.random()-0.5)*400, 50+Math.random()*100, (Math.random()-0.5)*400);
+    const starGeo = new THREE.BufferGeometry();
+    starGeo.setAttribute("position", new THREE.Float32BufferAttribute(sv, 3));
+    scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.3 })));
+
+    // Player state
+    const pos   = new THREE.Vector3(0, 8, 0);
+    const vel   = new THREE.Vector3();
+    const cheats: Cheats = { fly: false, immortal: false, speed: false, noclip: false };
+    const keys: Record<string, boolean> = {};
+    const clock = new THREE.Clock();
+    let yaw = 0, pitch = 0, onGround = false;
+    let hp = 100, coins_count = 0, score = 0;
+    let locked = false, paused = false, damageCooldown = 0;
+    const selectedBlockType = "grass";
+
+    gRef.current = { scene, camera, renderer, blocks, blockMeshes, coins, enemies, pos, vel, yaw, pitch, onGround, hp, coins_count, score, cheats, keys, locked, paused, selectedBlock: selectedBlockType, raf: 0, clock, raycaster, glowMeshes, damageCooldown };
+
+    // Pointer lock
+    function onPLChange() {
+      locked = document.pointerLockElement === renderer.domElement;
+      gRef.current.locked = locked;
+      setHud((h) => ({ ...h, locked }));
+    }
+    function onMouseMove(e: MouseEvent) {
+      if (!locked || paused) return;
+      yaw   -= e.movementX * 0.002;
+      pitch -= e.movementY * 0.002;
+      pitch  = Math.max(-Math.PI/2+0.01, Math.min(Math.PI/2-0.01, pitch));
+      gRef.current.yaw = yaw; gRef.current.pitch = pitch;
+    }
+    function onMouseDown(e: MouseEvent) {
+      if (!locked || paused) return;
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const hits = raycaster.intersectObjects(Array.from(blockMeshes.values()));
+      if (!hits.length || hits[0].distance > 5) return;
+      const hit = hits[0];
+      const bk  = (hit.object as THREE.Mesh).userData.blockKey as string;
+
+      if (e.button === 0) {
+        scene.remove(hit.object);
+        blockMeshes.delete(bk); blocks.delete(bk);
+        score += 5;
+        setHud((h) => ({ ...h, score, blocks: blockMeshes.size }));
+      } else if (e.button === 2 && hit.face) {
+        const n  = hit.face.normal.clone().round();
+        const bp = hit.object.position.clone().add(n);
+        const nk = `${Math.round(bp.x)},${Math.round(bp.y)},${Math.round(bp.z)}`;
+        if (!blocks.has(nk)) {
+          const nm = new THREE.Mesh(geom, getMat(gRef.current.selectedBlock));
+          nm.position.copy(bp);
+          nm.castShadow = true; nm.receiveShadow = true;
+          nm.userData = { blockKey: nk, blockType: gRef.current.selectedBlock };
+          scene.add(nm); blockMeshes.set(nk, nm); blocks.set(nk, gRef.current.selectedBlock);
+          setHud((h) => ({ ...h, blocks: blockMeshes.size }));
+        }
       }
     }
-    window.addEventListener("keydown", (e) => onKey(e, true));
-    window.addEventListener("keyup",   (e) => onKey(e, false));
 
-    function loop() {
-      if (!s.paused && !s.gameOver) tick();
-      render();
-      rafRef.current = requestAnimationFrame(loop);
+    function onKeyDown(e: KeyboardEvent) {
+      keys[e.code] = true;
+      if (!locked || paused) return;
+      if (e.code === "Space" && onGround && !cheats.fly) { vel.y = JUMP_V; onGround = false; }
+      if (e.code === "Space" && cheats.fly) vel.y = FLY_SPEED * 0.6;
+      if (e.code === "ShiftLeft" && cheats.fly) vel.y = -FLY_SPEED * 0.6;
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      keys[e.code] = false;
+      if ((e.code === "Space" || e.code === "ShiftLeft") && cheats.fly) vel.y = 0;
+      if (e.code === "Escape") { paused = !paused; gRef.current.paused = paused; setHud((h) => ({ ...h, paused })); }
     }
 
-    function tick() {
-      s.tick++;
-      const p = s.player;
-      const speed = (p.speedBoost ? MOVE_SPEED * 3 : MOVE_SPEED);
+    document.addEventListener("pointerlockchange", onPLChange);
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
+    renderer.domElement.addEventListener("click", () => { if (!locked) renderer.domElement.requestPointerLock(); });
+    renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
 
-      // Move
-      if (s.keys["ArrowLeft"]  || s.keys["a"]) p.x -= speed;
-      if (s.keys["ArrowRight"] || s.keys["d"]) p.x += speed;
-      p.x = Math.max(0, Math.min(W - PLAYER_SIZE, p.x));
-
-      // Flying
-      if (p.flying) {
-        if (s.keys["ArrowUp"]   || s.keys["w"]) p.y -= speed;
-        if (s.keys["ArrowDown"] || s.keys["s"]) p.y += speed;
-        p.y = Math.max(0, Math.min(GROUND_Y - PLAYER_SIZE, p.y));
-        s.vy = 0; s.onGround = false;
-      } else {
-        // Gravity
-        s.vy += GRAVITY;
-        p.y += s.vy;
-
-        // Ground
-        if (p.y >= GROUND_Y - PLAYER_SIZE) {
-          p.y = GROUND_Y - PLAYER_SIZE; s.vy = 0; s.onGround = true;
-        }
-
-        // Platforms
-        for (const pl of PLATFORM_LIST) {
-          const prevY = p.y - s.vy;
-          if (
-            p.x + PLAYER_SIZE > pl.x && p.x < pl.x + pl.w &&
-            prevY + PLAYER_SIZE <= pl.y && p.y + PLAYER_SIZE >= pl.y && s.vy >= 0
-          ) {
-            p.y = pl.y - PLAYER_SIZE; s.vy = 0; s.onGround = true;
-          }
-        }
+    // Collision
+    function blockAt(x: number, y: number, z: number) {
+      return blocks.has(`${Math.round(x)},${Math.round(y)},${Math.round(z)}`);
+    }
+    function resolveCollision(p: THREE.Vector3, noclip: boolean) {
+      if (noclip) return false;
+      let g = false; const r = 0.3;
+      if (blockAt(p.x,p.y-0.1,p.z)||blockAt(p.x+r,p.y-0.1,p.z)||blockAt(p.x-r,p.y-0.1,p.z)||blockAt(p.x,p.y-0.1,p.z+r)||blockAt(p.x,p.y-0.1,p.z-r)) {
+        p.y = Math.ceil(p.y - 0.1) + 0.1; vel.y = 0; g = true;
       }
+      if (blockAt(p.x,p.y+PLAYER_H,p.z)) { p.y -= 0.05; if (vel.y > 0) vel.y = 0; }
+      if (blockAt(p.x+r,p.y+0.5,p.z)||blockAt(p.x+r,p.y+1.2,p.z)) { p.x -= 0.05; vel.x = 0; }
+      if (blockAt(p.x-r,p.y+0.5,p.z)||blockAt(p.x-r,p.y+1.2,p.z)) { p.x += 0.05; vel.x = 0; }
+      if (blockAt(p.x,p.y+0.5,p.z+r)||blockAt(p.x,p.y+1.2,p.z+r)) { p.z -= 0.05; vel.z = 0; }
+      if (blockAt(p.x,p.y+0.5,p.z-r)||blockAt(p.x,p.y+1.2,p.z-r)) { p.z += 0.05; vel.z = 0; }
+      return g;
+    }
+
+    // Game loop
+    let hudTick = 0;
+    function animate() {
+      gRef.current.raf = requestAnimationFrame(animate);
+      const dt   = Math.min(clock.getDelta(), 0.05);
+      const time = clock.elapsedTime;
+
+      if (paused) { renderer.render(scene, camera); return; }
+
+      const speed = cheats.fly ? FLY_SPEED : WALK_SPEED;
+      const spd   = speed * (cheats.speed ? SPRINT_MULT * 2 : (keys["ShiftLeft"] && !cheats.fly ? SPRINT_MULT : 1));
+
+      const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+      const right   = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+      const move    = new THREE.Vector3();
+      if (keys["KeyW"]||keys["ArrowUp"])    move.addScaledVector(forward,  1);
+      if (keys["KeyS"]||keys["ArrowDown"])  move.addScaledVector(forward, -1);
+      if (keys["KeyA"]||keys["ArrowLeft"])  move.addScaledVector(right,   -1);
+      if (keys["KeyD"]||keys["ArrowRight"]) move.addScaledVector(right,    1);
+      if (move.lengthSq() > 0) { move.normalize().multiplyScalar(spd); vel.x = move.x; vel.z = move.z; }
+      else { vel.x *= 0.82; vel.z *= 0.82; }
+
+      if (cheats.fly) { if (!keys["Space"] && !keys["ShiftLeft"]) vel.y *= 0.85; }
+      else vel.y += GRAVITY * dt;
+
+      pos.x += vel.x * dt; pos.z += vel.z * dt; pos.y += vel.y * dt;
+
+      const gr = resolveCollision(pos, cheats.noclip);
+      if (gr) onGround = true; else if (!cheats.fly) onGround = false;
+
+      if (pos.y < -20) { pos.set(0, 10, 0); vel.set(0, 0, 0); if (!cheats.immortal) { hp = Math.max(0, hp - 20); } }
+      const B = WORLD_SIZE + 2;
+      if (!cheats.noclip) { pos.x = Math.max(-B, Math.min(B, pos.x)); pos.z = Math.max(-B, Math.min(B, pos.z)); }
+
+      camera.position.set(pos.x, pos.y + PLAYER_H, pos.z);
+      camera.rotation.set(0, 0, 0, "YXZ");
+      camera.rotation.y = yaw; camera.rotation.x = pitch;
 
       // Coins
-      s.coins = s.coins.filter((c) => {
-        if (dist(p.x + PLAYER_SIZE / 2, p.y + PLAYER_SIZE / 2, c.x, c.y) < PLAYER_SIZE) {
-          p.coins += c.value; p.score += c.value;
-          addParticle(s, c.x, c.y, "#FFE600", `+${c.value}`);
-          return false;
+      for (let i = coins.length - 1; i >= 0; i--) {
+        coins[i].rotation.y += dt * 2;
+        coins[i].position.y += Math.sin(time * 2 + i) * 0.002;
+        if (pos.distanceTo(coins[i].position) < 1.2) {
+          scene.remove(coins[i]); coins.splice(i, 1);
+          coins_count += 10; score += 10;
+          gRef.current.coins_count = coins_count; gRef.current.score = score;
+          hudTick = 0;
         }
-        return true;
-      });
-      while (s.coins.length < 5) s.coins.push(mkCoin(s.pidCounter++));
-
-      // Items
-      s.items = s.items.filter((it) => {
-        if (dist(p.x + PLAYER_SIZE / 2, p.y + PLAYER_SIZE / 2, it.x, it.y) < PLAYER_SIZE + 10) {
-          addParticle(s, it.x, it.y, ITEM_TYPES[it.type]?.color || "#fff", ITEM_TYPES[it.type]?.icon);
-          if (it.type === "star") { p.score += 100; p.coins += 50; }
-          if (it.type === "shield") p.immortal = true;
-          if (it.type === "bomb") {
-            s.enemies.forEach((e) => { if (dist(e.x, e.y, it.x, it.y) < 120) { e.hp = 0; } });
-            s.enemies = s.enemies.filter((e) => e.hp > 0);
-          }
-          return false;
-        }
-        return true;
-      });
-      while (s.items.length < 2) s.items.push(mkItem(s.pidCounter++));
-
-      // Enemies
-      if (s.tick % 300 === 0 && s.enemies.length < 6) s.enemies.push(mkEnemy(s.pidCounter++));
-      s.enemies.forEach((e) => {
-        const dir = p.x > e.x ? 1 : -1;
-        e.x += dir * e.speed;
-        if (dist(p.x + PLAYER_SIZE / 2, p.y + PLAYER_SIZE / 2, e.x + ENEMY_SIZE / 2, e.y + ENEMY_SIZE / 2) < PLAYER_SIZE && !p.immortal) {
-          if (s.tick % 40 === 0) { p.hp -= 10; }
-        }
-      });
-      if (p.hp <= 0 && !p.immortal) {
-        s.gameOver = true;
-        setUiState((u) => ({ ...u, gameOver: true }));
       }
 
-      // Particles
-      s.particles = s.particles.filter((pt) => { pt.x += pt.vx; pt.y += pt.vy; pt.life--; return pt.life > 0; });
-
-      // Sync UI every 6 ticks
-      if (s.tick % 6 === 0) {
-        setUiState((u) => ({
-          ...u, hp: p.hp, coins: p.coins, score: p.score,
-          flying: p.flying, immortal: p.immortal, speedBoost: p.speedBoost,
-        }));
-      }
-    }
-
-    function render() {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const ctx = canvas.getContext("2d")!;
-      const p = s.player;
-
-      // Background
-      ctx.fillStyle = "#0a1628";
-      ctx.fillRect(0, 0, W, H);
-
-      // Sky gradient
-      const sky = ctx.createLinearGradient(0, 0, 0, H);
-      sky.addColorStop(0, "#0a1628");
-      sky.addColorStop(1, "#1a0a28");
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, W, H);
-
-      // Grid
-      ctx.strokeStyle = "rgba(0,255,136,0.04)";
-      ctx.lineWidth = 1;
-      for (let x = 0; x < W; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-      for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-
-      // Ground
-      const grd = ctx.createLinearGradient(0, GROUND_Y, 0, H);
-      grd.addColorStop(0, "#1a4a2a");
-      grd.addColorStop(1, "#0a2a12");
-      ctx.fillStyle = grd;
-      ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
-      ctx.strokeStyle = "#00FF88";
-      ctx.lineWidth = 2;
-      ctx.shadowColor = "#00FF88"; ctx.shadowBlur = 8;
-      ctx.beginPath(); ctx.moveTo(0, GROUND_Y); ctx.lineTo(W, GROUND_Y); ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // Platforms
-      for (const pl of PLATFORM_LIST) {
-        ctx.fillStyle = "#1a3a4a";
-        ctx.beginPath(); ctx.roundRect(pl.x, pl.y, pl.w, pl.h, 4); ctx.fill();
-        ctx.strokeStyle = "#00CFFF"; ctx.lineWidth = 1.5;
-        ctx.shadowColor = "#00CFFF"; ctx.shadowBlur = 6;
-        ctx.stroke(); ctx.shadowBlur = 0;
-      }
-
-      // Coins
-      for (const c of s.coins) {
-        ctx.save();
-        ctx.shadowColor = "#FFE600"; ctx.shadowBlur = 10;
-        ctx.fillStyle = "#FFE600";
-        ctx.beginPath(); ctx.arc(c.x, c.y, COIN_SIZE / 2, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = "#fff8"; ctx.font = "bold 9px Rubik";
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText("$", c.x, c.y);
-        ctx.restore();
-      }
-
-      // Items
-      for (const it of s.items) {
-        const info = ITEM_TYPES[it.type];
-        ctx.save();
-        ctx.shadowColor = info.color; ctx.shadowBlur = 12;
-        ctx.fillStyle = info.color + "33";
-        ctx.beginPath(); ctx.arc(it.x, it.y, 16, 0, Math.PI * 2); ctx.fill();
-        ctx.font = "18px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText(info.icon, it.x, it.y);
-        ctx.restore();
+      // Glowstone glow
+      for (let i = 0; i < glowMeshes.length; i++) {
+        const mat = (glowMeshes[i] as THREE.Mesh).material as THREE.MeshLambertMaterial;
+        mat.emissive?.setHex(0xFFD700);
+        mat.emissiveIntensity = 0.5 + Math.sin(time * 3 + i) * 0.3;
       }
 
       // Enemies
-      for (const e of s.enemies) {
-        ctx.save();
-        ctx.shadowColor = "#FF0080"; ctx.shadowBlur = 12;
-        // Body
-        ctx.fillStyle = "#FF0080";
-        ctx.beginPath(); ctx.roundRect(e.x, e.y, ENEMY_SIZE, ENEMY_SIZE, 6); ctx.fill();
-        // Eyes
-        ctx.fillStyle = "#fff";
-        ctx.beginPath(); ctx.arc(e.x + 7, e.y + 9, 4, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(e.x + 19, e.y + 9, 4, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = "#000";
-        ctx.beginPath(); ctx.arc(e.x + 8, e.y + 9, 2, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(e.x + 20, e.y + 9, 2, 0, Math.PI * 2); ctx.fill();
-        // HP bar
-        ctx.fillStyle = "#333"; ctx.fillRect(e.x, e.y - 8, ENEMY_SIZE, 4);
-        ctx.fillStyle = "#FF0080"; ctx.shadowBlur = 4;
-        ctx.fillRect(e.x, e.y - 8, ENEMY_SIZE * (e.hp / e.maxHp), 4);
-        ctx.restore();
-      }
-
-      // Player
-      ctx.save();
-      const pc = p.immortal ? "#FFE600" : p.flying ? "#00CFFF" : "#00FF88";
-      ctx.shadowColor = pc; ctx.shadowBlur = p.immortal ? 20 : 12;
-
-      // Body
-      ctx.fillStyle = pc;
-      ctx.beginPath(); ctx.roundRect(p.x, p.y, PLAYER_SIZE, PLAYER_SIZE, 6); ctx.fill();
-
-      // Face
-      ctx.fillStyle = "#fff";
-      ctx.beginPath(); ctx.arc(p.x + 8, p.y + 10, 4, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(p.x + 20, p.y + 10, 4, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = "#000";
-      ctx.beginPath(); ctx.arc(p.x + 9, p.y + 10, 2, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(p.x + 21, p.y + 10, 2, 0, Math.PI * 2); ctx.fill();
-
-      // Fly wings
-      if (p.flying) {
-        ctx.fillStyle = "#00CFFF88";
-        ctx.beginPath(); ctx.ellipse(p.x - 8, p.y + 14, 10, 6, -0.4, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.ellipse(p.x + PLAYER_SIZE + 8, p.y + 14, 10, 6, 0.4, 0, Math.PI * 2); ctx.fill();
-      }
-      ctx.restore();
-
-      // Particles
-      for (const pt of s.particles) {
-        ctx.save();
-        const alpha = pt.life / 60;
-        if (pt.text) {
-          ctx.globalAlpha = Math.min(1, alpha * 2);
-          ctx.fillStyle = pt.color;
-          ctx.font = "bold 13px Rubik";
-          ctx.textAlign = "center";
-          ctx.shadowColor = pt.color; ctx.shadowBlur = 8;
-          ctx.fillText(pt.text, pt.x, pt.y);
-        } else {
-          ctx.globalAlpha = alpha;
-          ctx.fillStyle = pt.color;
-          ctx.beginPath(); ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2); ctx.fill();
+      damageCooldown = Math.max(0, damageCooldown - dt);
+      for (const enemy of enemies) {
+        const dir = pos.clone().sub(enemy.mesh.position); dir.y = 0;
+        if (dir.length() > 0.5) { dir.normalize().multiplyScalar(2.5 * dt); enemy.mesh.position.add(dir); }
+        enemy.mesh.rotation.y += dt;
+        if (pos.distanceTo(enemy.mesh.position) < 1.5 && damageCooldown <= 0 && !cheats.immortal) {
+          hp = Math.max(0, hp - 8); damageCooldown = 1.0;
         }
-        ctx.restore();
       }
+      gRef.current.hp = hp; gRef.current.damageCooldown = damageCooldown;
 
-      // Game over overlay
-      if (s.gameOver) {
-        ctx.fillStyle = "rgba(0,0,0,0.75)";
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = "#FF0080"; ctx.shadowColor = "#FF0080"; ctx.shadowBlur = 24;
-        ctx.font = "bold 36px 'Press Start 2P', monospace";
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText("GAME OVER", W / 2, H / 2 - 20);
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = "#888"; ctx.font = "14px Rubik";
-        ctx.fillText("Нажми R чтобы начать заново", W / 2, H / 2 + 24);
-      }
+      hudTick++;
+      if (hudTick % 6 === 0) setHud((h) => ({ ...h, hp, coins: coins_count, score, locked, paused, blocks: blockMeshes.size }));
 
-      // Pause overlay
-      if (s.paused && !s.gameOver) {
-        ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillRect(0, 0, W, H);
-        ctx.fillStyle = "#00FF88"; ctx.shadowColor = "#00FF88"; ctx.shadowBlur = 20;
-        ctx.font = "bold 28px 'Press Start 2P', monospace";
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.fillText("ПАУЗА", W / 2, H / 2);
-      }
+      renderer.render(scene, camera);
     }
+    animate();
 
-    // Keys
-    function onKeyGlobal(e: KeyboardEvent) {
-      if (e.key === "r" || e.key === "R") restart();
-      if (e.key === "Escape") { s.paused = !s.paused; setUiState((u) => ({ ...u, paused: s.paused })); }
+    function onResize() {
+      camera.aspect = mount.clientWidth / mount.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(mount.clientWidth, mount.clientHeight);
     }
-    window.addEventListener("keydown", onKeyGlobal);
-
-    rafRef.current = requestAnimationFrame(loop);
+    window.addEventListener("resize", onResize);
 
     return () => {
-      cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("keydown", onKeyGlobal);
+      cancelAnimationFrame(gRef.current?.raf ?? 0);
+      document.removeEventListener("pointerlockchange", onPLChange);
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("resize", onResize);
+      renderer.dispose();
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
+   
   }, []);
 
-  function restart() {
-    const s = stateRef.current;
-    s.player = { x: 100, y: GROUND_Y - PLAYER_SIZE, hp: 100, maxHp: 100, coins: 0, score: 0, flying: false, immortal: false, speedBoost: false };
-    s.vy = 0; s.onGround = true;
-    s.enemies = []; s.coins = []; s.items = []; s.particles = [];
-    for (let i = 0; i < 6; i++) s.coins.push(mkCoin(s.pidCounter++));
-    for (let i = 0; i < 2; i++) s.enemies.push(mkEnemy(s.pidCounter++));
-    for (let i = 0; i < 2; i++) s.items.push(mkItem(s.pidCounter++));
-    s.gameOver = false; s.paused = false;
-    setUiState({ hp: 100, coins: 0, score: 0, flying: false, immortal: false, speedBoost: false, gameOver: false, paused: false });
-  }
+  useEffect(() => { if (gRef.current) gRef.current.selectedBlock = selectedBlock; }, [selectedBlock]);
 
-  function togglePause() {
-    const s = stateRef.current;
-    s.paused = !s.paused;
-    setUiState((u) => ({ ...u, paused: s.paused }));
-  }
-
-  function handleAdminLogin() {
-    if (adminPass === ADMIN_PASSWORD) {
-      setAdminUnlocked(true); setAdminError(false);
-    } else {
-      setAdminError(true);
-    }
-  }
-
-  // ─── UI ───────────────────────────────────────────────────────────────────
-  const hpPct = (uiState.hp / 100) * 100;
-  const hpColor = hpPct > 50 ? "#00FF88" : hpPct > 25 ? "#FFE600" : "#FF0080";
+  const hpColor    = hud.hp > 60 ? "#00FF88" : hud.hp > 30 ? "#FFE600" : "#FF0080";
+  const BLOCK_LIST = Object.keys(BLOCK_COLORS);
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-start pt-4 pb-8 px-2" style={{ background: "#080808" }}>
-      {/* Header */}
-      <div className="w-full max-w-4xl flex items-center justify-between mb-3 px-1">
-        <a href="/" className="flex items-center gap-2 group">
-          <span className="font-pixel text-xs" style={{ color: "#00FF88" }}>⛏</span>
-          <span className="font-pixel text-xs hidden sm:block" style={{ color: "#555", fontSize: 9 }}>MC<span style={{ color: "#00FF88" }}>SERVERS</span></span>
-        </a>
-        <div className="font-pixel text-xs" style={{ color: "#FF0080", textShadow: "0 0 10px #FF0080", fontSize: 11 }}>🎮 ROBLOX STYLE</div>
+    <div className="relative w-full" style={{ height: "100dvh", background: "#000", overflow: "hidden" }}>
+
+      {/* Viewport */}
+      <div ref={mountRef} className="absolute inset-0" style={{ cursor: hud.locked ? "none" : "default" }} />
+
+      {/* Crosshair */}
+      {hud.locked && !hud.paused && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div style={{ position: "relative", width: 24, height: 24 }}>
+            <div style={{ position: "absolute", left: 11, top: 4, width: 2, height: 16, background: "rgba(255,255,255,0.85)", borderRadius: 1 }} />
+            <div style={{ position: "absolute", top: 11, left: 4, width: 16, height: 2, background: "rgba(255,255,255,0.85)", borderRadius: 1 }} />
+          </div>
+        </div>
+      )}
+
+      {/* HUD верхний левый */}
+      <div className="absolute top-3 left-3 flex flex-col gap-2 pointer-events-none">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", border: "1px solid rgba(255,255,255,0.08)" }}>
+          <span style={{ color: hpColor, fontSize: 16 }}>❤</span>
+          <div style={{ width: 80, height: 6, background: "#222", borderRadius: 3 }}>
+            <div style={{ width: `${hud.hp}%`, height: 6, background: hpColor, borderRadius: 3, boxShadow: `0 0 6px ${hpColor}`, transition: "width 0.3s" }} />
+          </div>
+          <span className="font-pixel" style={{ color: hpColor, fontSize: 10 }}>{hud.hp}</span>
+        </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => setShowAdmin(true)}
-            className="font-pixel text-xs px-3 py-1.5 rounded-lg transition-all hover:scale-105"
-            style={{ background: "#1a0a0a", color: "#FF0080", border: "1px solid #FF008033", fontSize: 9 }}
-          >
-            👑 ADMIN
-          </button>
-          <button
-            onClick={() => setShowCheats(!showCheats)}
-            className="font-pixel text-xs px-3 py-1.5 rounded-lg transition-all hover:scale-105"
-            style={{ background: "#0a1a0a", color: "#00FF88", border: "1px solid #00FF8833", fontSize: 9 }}
-          >
-            ⚡ ЧИТЫ
-          </button>
+          {[{ icon: "💰", val: hud.coins, color: "#FFE600" }, { icon: "⭐", val: hud.score, color: "#00CFFF" }].map((s) => (
+            <div key={s.icon} className="px-3 py-1.5 rounded-xl flex items-center gap-1.5" style={{ background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <span style={{ fontSize: 14 }}>{s.icon}</span>
+              <span className="font-pixel" style={{ color: s.color, fontSize: 10 }}>{s.val}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {hud.cheats.fly      && <span className="font-pixel px-2 py-0.5 rounded" style={{ background: "#00CFFF22", color: "#00CFFF", border: "1px solid #00CFFF44", fontSize: 9 }}>✈ ПОЛЁТ</span>}
+          {hud.cheats.immortal && <span className="font-pixel px-2 py-0.5 rounded" style={{ background: "#FFE60022", color: "#FFE600", border: "1px solid #FFE60044", fontSize: 9 }}>⭐ БЕССМ.</span>}
+          {hud.cheats.speed    && <span className="font-pixel px-2 py-0.5 rounded" style={{ background: "#FF008022", color: "#FF0080", border: "1px solid #FF008044", fontSize: 9 }}>⚡ СКОР.</span>}
+          {hud.cheats.noclip   && <span className="font-pixel px-2 py-0.5 rounded" style={{ background: "#A855F722", color: "#A855F7", border: "1px solid #A855F744", fontSize: 9 }}>👻 NOCLIP</span>}
         </div>
       </div>
 
-      {/* Game + Cheats side by side */}
-      <div className="flex gap-4 w-full max-w-5xl">
+      {/* Верхний правый */}
+      <div className="absolute top-3 right-3 flex gap-2">
+        <a href="/" className="font-pixel px-3 py-2 rounded-xl transition-all hover:scale-105"
+          style={{ background: "rgba(0,0,0,0.7)", color: "#555", border: "1px solid rgba(255,255,255,0.1)", fontSize: 9 }}>
+          ← КАТАЛОГ
+        </a>
+        <button onClick={() => setShowCheats(!showCheats)}
+          className="font-pixel px-3 py-2 rounded-xl transition-all hover:scale-105"
+          style={{ background: showCheats ? "rgba(0,255,136,0.15)" : "rgba(0,0,0,0.7)", color: "#00FF88", border: "1px solid rgba(0,255,136,0.3)", fontSize: 9 }}>
+          ⚡ ЧИТЫ
+        </button>
+      </div>
 
-        {/* Canvas + HUD */}
-        <div className="flex flex-col" style={{ flex: "0 0 auto" }}>
-          {/* HUD */}
-          <div className="flex items-center gap-4 mb-2 px-1 flex-wrap">
-            {/* HP */}
-            <div className="flex items-center gap-2 min-w-[140px]">
-              <span className="text-xs font-bold" style={{ color: "#FF0080" }}>❤️</span>
-              <div className="flex-1 rounded-full" style={{ height: 8, background: "#222", minWidth: 80 }}>
-                <div className="rounded-full transition-all" style={{ width: `${hpPct}%`, height: 8, background: hpColor, boxShadow: `0 0 8px ${hpColor}` }} />
-              </div>
-              <span className="text-xs font-bold" style={{ color: hpColor }}>{uiState.hp}</span>
-            </div>
-            {/* Coins */}
-            <div className="flex items-center gap-1">
-              <span style={{ color: "#FFE600", fontSize: 14 }}>💰</span>
-              <span className="font-pixel text-xs" style={{ color: "#FFE600", fontSize: 11 }}>{uiState.coins}</span>
-            </div>
-            {/* Score */}
-            <div className="flex items-center gap-1">
-              <span style={{ color: "#00CFFF", fontSize: 14 }}>⭐</span>
-              <span className="font-pixel text-xs" style={{ color: "#00CFFF", fontSize: 11 }}>{uiState.score}</span>
-            </div>
-            {/* Status icons */}
-            <div className="flex gap-2 ml-auto">
-              {uiState.flying   && <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#00CFFF22", color: "#00CFFF", border: "1px solid #00CFFF44" }}>✈ Полёт</span>}
-              {uiState.immortal && <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#FFE60022", color: "#FFE600", border: "1px solid #FFE60044" }}>⭐ Бессмертие</span>}
-              {uiState.speedBoost && <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#FF008022", color: "#FF0080", border: "1px solid #FF008044" }}>⚡ Скорость</span>}
-              <button onClick={togglePause} className="text-xs px-2 py-0.5 rounded transition-all" style={{ background: "#111", color: "#555", border: "1px solid #222" }}>
-                {uiState.paused ? "▶" : "⏸"}
-              </button>
-              <button onClick={restart} className="text-xs px-2 py-0.5 rounded transition-all" style={{ background: "#111", color: "#555", border: "1px solid #222" }}>↺</button>
-            </div>
-          </div>
+      {/* Hotbar */}
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1 pointer-events-auto">
+        {BLOCK_LIST.map((b) => (
+          <button key={b} onClick={() => setSelectedBlock(b)}
+            className="rounded-lg transition-all hover:scale-110"
+            title={b}
+            style={{
+              width: 44, height: 44,
+              background: `#${BLOCK_COLORS[b].toString(16).padStart(6, "0")}`,
+              border: selectedBlock === b ? "2px solid #fff" : "2px solid rgba(255,255,255,0.2)",
+              boxShadow: selectedBlock === b ? "0 0 12px rgba(255,255,255,0.4)" : "none",
+              opacity: selectedBlock === b ? 1 : 0.65,
+            }} />
+        ))}
+      </div>
 
-          {/* Canvas */}
-          <canvas
-            ref={canvasRef}
-            width={W} height={H}
-            className="rounded-xl"
-            style={{ border: "1px solid #1a1a1a", display: "block", maxWidth: "100%" }}
-          />
+      {/* Block hint */}
+      <div className="absolute bottom-16 left-1/2 -translate-x-1/2 pointer-events-none">
+        <span className="font-pixel px-3 py-1 rounded-lg" style={{ background: "rgba(0,0,0,0.6)", color: "#888", fontSize: 9 }}>
+          [{selectedBlock}] &nbsp; ЛКМ — сломать &nbsp; ПКМ — поставить
+        </span>
+      </div>
 
-          {/* Controls hint */}
-          <div className="flex gap-4 mt-2 justify-center flex-wrap">
-            {[["← →", "Движение"], ["↑ / W", "Прыжок"], ["↑↓", "Полёт (читы)"], ["ESC", "Пауза"], ["R", "Рестарт"]].map(([k, v]) => (
-              <div key={k} className="flex items-center gap-1">
-                <span className="text-xs px-1.5 py-0.5 rounded font-mono" style={{ background: "#111", color: "#555", border: "1px solid #222" }}>{k}</span>
-                <span className="text-xs" style={{ color: "#333" }}>{v}</span>
-              </div>
-            ))}
-          </div>
+      {/* Cheat panel */}
+      {showCheats && (
+        <div className="absolute top-14 right-3 w-52 flex flex-col gap-1.5 animate-fade-in-up"
+          style={{ background: "rgba(8,8,8,0.92)", border: "1px solid rgba(0,255,136,0.2)", borderRadius: 16, padding: 12, backdropFilter: "blur(8px)" }}>
+          <div className="font-pixel mb-1" style={{ color: "#00FF88", fontSize: 9 }}>⚡ ПАНЕЛЬ ЧИТОВ</div>
+          {[
+            { label: "✈ Полёт",        action: toggleFly,       active: hud.cheats.fly,      color: "#00CFFF" },
+            { label: "⭐ Бессмертие",  action: toggleImmortal,  active: hud.cheats.immortal, color: "#FFE600" },
+            { label: "⚡ Скорость x3", action: toggleSpeed,     active: hud.cheats.speed,    color: "#FF0080" },
+            { label: "👻 Noclip",      action: toggleNoclip,    active: hud.cheats.noclip,   color: "#A855F7" },
+          ].map((ch) => (
+            <button key={ch.label} onClick={ch.action}
+              className="text-xs px-3 py-2 rounded-lg text-left transition-all hover:scale-[1.02] font-medium"
+              style={{ background: ch.active ? `${ch.color}22` : "rgba(255,255,255,0.04)", color: ch.active ? ch.color : "#666", border: `1px solid ${ch.active ? ch.color+"55" : "rgba(255,255,255,0.08)"}`, boxShadow: ch.active ? `0 0 8px ${ch.color}44` : "none" }}>
+              {ch.label} <span style={{ opacity: 0.5, fontSize: 10 }}>{ch.active ? "ВКЛ" : "ВЫКЛ"}</span>
+            </button>
+          ))}
+          <div className="h-px my-1" style={{ background: "rgba(255,255,255,0.06)" }} />
+          {[
+            { label: "💊 Полное HP",          action: cheatFullHp },
+            { label: "💰 +500 монет",         action: () => cheatAddCoins(500) },
+            { label: "💰 +5000 монет",        action: () => cheatAddCoins(5000) },
+            { label: "📍 Телепорт на спавн",  action: cheatTeleport },
+            { label: "💀 Убить врагов",       action: cheatKillEnemies },
+          ].map((ch) => (
+            <button key={ch.label} onClick={ch.action}
+              className="text-xs px-3 py-2 rounded-lg text-left transition-all hover:scale-[1.02]"
+              style={{ background: "rgba(255,255,255,0.04)", color: "#888", border: "1px solid rgba(255,255,255,0.08)" }}>
+              {ch.label}
+            </button>
+          ))}
+          {cheatLog.length > 0 && (
+            <div className="mt-1 rounded-lg p-2" style={{ background: "rgba(0,0,0,0.4)", maxHeight: 90, overflowY: "auto" }}>
+              {cheatLog.map((l, i) => <div key={i} style={{ color: "#444", fontSize: 9, lineHeight: 1.7 }}>{l}</div>)}
+            </div>
+          )}
         </div>
+      )}
 
-        {/* Cheat panel */}
-        {showCheats && (
-          <div className="flex flex-col gap-2 animate-fade-in-up" style={{ width: 200, flexShrink: 0 }}>
-            <div className="font-pixel text-xs mb-1" style={{ color: "#00FF88", fontSize: 9 }}>⚡ ЧИТЫ</div>
-
-            {[
-              { label: "💊 Полное HP",      action: cheatFullHp,           color: "#00FF88" },
-              { label: "✈ Полёт",           action: cheatFly,              color: "#00CFFF", active: uiState.flying },
-              { label: "⭐ Бессмертие",     action: cheatImmortal,         color: "#FFE600", active: uiState.immortal },
-              { label: "⚡ Скорость x3",    action: cheatSpeed,            color: "#FF0080", active: uiState.speedBoost },
-              { label: "📍 Телепорт",       action: cheatTeleport,         color: "#00CFFF" },
-              { label: "💰 +1000 монет",    action: () => cheatMoney(1000),color: "#FFE600" },
-              { label: "💰 +10000 монет",   action: () => cheatMoney(10000),color: "#FFE600" },
-              { label: "💀 Убить всех",     action: cheatKillAll,          color: "#FF0080" },
-              { label: "👿 +3 врага",       action: () => cheatSpawnEnemy(3), color: "#FF0080" },
-              { label: "🛡️ Спавн: щит",    action: () => cheatSpawnItem("shield"), color: "#00CFFF" },
-              { label: "💣 Спавн: бомба",   action: () => cheatSpawnItem("bomb"),   color: "#FF0080" },
-              { label: "⭐ Спавн: звезда",  action: () => cheatSpawnItem("star"),   color: "#FFE600" },
-            ].map((ch) => (
-              <button
-                key={ch.label}
-                onClick={ch.action}
-                className="text-xs px-3 py-2 rounded-lg text-left transition-all hover:scale-[1.03] active:scale-95 font-medium"
-                style={{
-                  background: ch.active ? `${ch.color}22` : "#111",
-                  color: ch.active ? ch.color : "#888",
-                  border: `1px solid ${ch.active ? ch.color + "55" : "#1a1a1a"}`,
-                  boxShadow: ch.active ? `0 0 8px ${ch.color}44` : "none",
-                }}
-              >
-                {ch.label}
-                {ch.active !== undefined && (
-                  <span className="ml-1 text-xs opacity-60">{ch.active ? "ВКЛ" : "ВЫКЛ"}</span>
-                )}
-              </button>
-            ))}
-
-            {/* Log */}
-            <div className="mt-2 rounded-lg p-2 flex flex-col gap-1" style={{ background: "#0a0a0a", border: "1px solid #1a1a1a", maxHeight: 160, overflowY: "auto" }}>
-              <div className="font-pixel text-xs mb-1" style={{ color: "#333", fontSize: 8 }}>ЛОГ ЧИТОВ</div>
-              {cheatLog.length === 0 && <div className="text-xs" style={{ color: "#333" }}>Пусто</div>}
-              {cheatLog.map((l, i) => (
-                <div key={i} className="text-xs" style={{ color: "#555", fontSize: 10 }}>{l}</div>
+      {/* Overlay: click to play */}
+      {!hud.locked && !hud.paused && (
+        <div className="absolute inset-0 flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)", cursor: "pointer" }}
+          onClick={() => { const c = mountRef.current?.querySelector("canvas") as HTMLElement | null; c?.requestPointerLock?.(); }}>
+          <div className="text-center animate-fade-in-up px-6">
+            <div className="font-pixel mb-4" style={{ color: "#00FF88", textShadow: "0 0 20px #00FF88", fontSize: 20 }}>⛏ MINECRAFT 3D</div>
+            <div className="text-sm mb-6" style={{ color: "#888" }}>Нажми чтобы начать играть</div>
+            <div className="flex flex-col gap-1.5 text-xs max-w-xs mx-auto text-left mb-6" style={{ color: "#555" }}>
+              {[["WASD / Стрелки","Движение"],["Мышь","Обзор"],["Пробел","Прыжок / подъём"],["Shift","Спуск (полёт)"],["ЛКМ","Сломать блок"],["ПКМ","Поставить блок"],["ESC","Пауза"]].map(([k,v]) => (
+                <div key={k} className="flex gap-2"><span className="px-1.5 rounded font-mono" style={{ background: "#111", color: "#555", border: "1px solid #333", minWidth: 120 }}>{k}</span><span>{v}</span></div>
               ))}
             </div>
+            <div className="font-pixel px-6 py-3 rounded-xl inline-block"
+              style={{ background: "linear-gradient(135deg, #00FF88, #00CFFF)", color: "#080808", boxShadow: "0 0 24px rgba(0,255,136,0.4)", fontSize: 10 }}>
+              ▶ ИГРАТЬ
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Пауза */}
+      {hud.paused && (
+        <div className="absolute inset-0 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}>
+          <div className="text-center animate-fade-in-up">
+            <div className="font-pixel mb-4" style={{ color: "#00FF88", textShadow: "0 0 20px #00FF88", fontSize: 18 }}>⏸ ПАУЗА</div>
+            <div className="text-sm" style={{ color: "#555" }}>ESC — продолжить</div>
+          </div>
+        </div>
+      )}
+
+      {/* Notification toast */}
+      {notification && (
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 pointer-events-none animate-fade-in-up">
+          <div className="font-pixel px-4 py-2 rounded-xl" style={{ background: "rgba(0,255,136,0.15)", color: "#00FF88", border: "1px solid rgba(0,255,136,0.3)", fontSize: 10, backdropFilter: "blur(4px)" }}>
+            {notification}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
