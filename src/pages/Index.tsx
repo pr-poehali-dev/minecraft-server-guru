@@ -180,6 +180,13 @@ function OnlineBar({ online, max }: { online: number; max: number }) {
 function ServerCard({ server, index, compact = false }: { server: typeof SERVERS[0]; index: number; compact?: boolean }) {
   const rankColors = ["#FFE600", "#C0C0C0", "#CD7F32"];
   const rankColor = rankColors[index] || server.color;
+  const [copied, setCopied] = useState(false);
+
+  function copyIp() {
+    navigator.clipboard.writeText(server.ip);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   return (
     <div
@@ -247,6 +254,20 @@ function ServerCard({ server, index, compact = false }: { server: typeof SERVERS
           <span>{server.votes.toLocaleString()}</span>
         </div>
       </div>
+
+      <button
+        onClick={(e) => { e.stopPropagation(); copyIp(); }}
+        className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-xs font-semibold transition-all hover:scale-[1.02] active:scale-95"
+        style={{
+          background: copied ? `${server.color}22` : "#0a0a0a",
+          color: copied ? server.color : "#555",
+          border: `1px solid ${copied ? server.color + "66" : "#222"}`,
+          boxShadow: copied ? `0 0 12px ${server.color}44` : "none",
+        }}
+      >
+        <Icon name={copied ? "Check" : "Copy"} size={13} />
+        {copied ? "Скопировано!" : server.ip}
+      </button>
     </div>
   );
 }
