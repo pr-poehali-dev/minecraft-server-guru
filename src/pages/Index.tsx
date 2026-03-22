@@ -791,7 +791,29 @@ export default function Index() {
         {tab === "add" && <AddServerSection />}
       </main>
 
-      <footer className="text-center py-8 mt-8" style={{ borderTop: "1px solid #1a1a1a" }}>
+      {/* Game promo banner */}
+      <div className="max-w-5xl mx-auto px-4 mb-4">
+        <div className="rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4"
+          style={{ background: "linear-gradient(135deg, #0a0a1a, #1a0a1a)", border: "1px solid #FF008033" }}>
+          <div>
+            <div className="font-pixel text-xs mb-1" style={{ color: "#FF0080", fontSize: 10 }}>🎮 МИНИ-ИГРА</div>
+            <div className="text-sm font-semibold" style={{ color: "#F0F0F0" }}>Roblox-style игра с читами</div>
+            <div className="text-xs mt-0.5" style={{ color: "#555" }}>Телепорт, полёт, бессмертие, бесконечные монеты</div>
+          </div>
+          <div className="flex gap-3 flex-shrink-0">
+            <a href="/game" className="font-pixel text-xs px-5 py-2.5 rounded-xl transition-all hover:scale-105"
+              style={{ background: "linear-gradient(135deg, #FF0080, #FF4080)", color: "#fff", boxShadow: "0 0 16px rgba(255,0,128,0.3)", fontSize: 9 }}>
+              ▶ ИГРАТЬ
+            </a>
+            <a href="/admin" className="font-pixel text-xs px-5 py-2.5 rounded-xl transition-all hover:scale-105"
+              style={{ background: "#1a0a0a", color: "#FF0080", border: "1px solid #FF008033", fontSize: 9 }}>
+              👑 АДМИНКА
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <footer className="text-center py-8 mt-2" style={{ borderTop: "1px solid #1a1a1a" }}>
         <div className="font-pixel text-xs mb-2" style={{ color: "#222" }}>⛏ MCSERVERS</div>
         <div className="text-xs" style={{ color: "#333" }}>Лучший каталог Minecraft серверов для ПК</div>
       </footer>
